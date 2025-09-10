@@ -1045,7 +1045,6 @@ logging.basicConfig(
 # Credentials Loading Functions
 # -----------------------------
 def load_service_account_info():
-    """Load Google service account credentials from file or environment variable"""
     file_env = os.environ.get("GOOGLE_CREDENTIALS_FILE")
     if file_env:
         if os.path.exists(file_env):
@@ -1058,7 +1057,10 @@ def load_service_account_info():
         raise ValueError("GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE is required.")
 
     txt = creds_raw.strip()
+
     if txt.startswith("{"):
+        # Fix escaped newlines in private_key
+        txt = txt.replace("\\n", "\n")
         return json.loads(txt)
 
     if os.path.exists(creds_raw):
@@ -1066,6 +1068,7 @@ def load_service_account_info():
             return json.load(fh)
 
     raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")
+
 
 class MontgomeryCountyScraper:
     def __init__(self, headless=True):

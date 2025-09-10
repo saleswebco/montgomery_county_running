@@ -586,7 +586,10 @@ class GoogleSheetsHandler:
     def __init__(self, spreadsheet_id: str):
         self.spreadsheet_id = spreadsheet_id
         sa_info = load_service_account_info()
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.metadata.readonly"
+        ]
         creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
         self.client = gspread.authorize(creds)
         self.spreadsheet = self.client.open_by_key(spreadsheet_id)

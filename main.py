@@ -442,6 +442,7 @@ from google.oauth2 import service_account
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 
 # -----------------------------
 # Scraper Definition (same as your code, trimmed sleeps for CI speed)
@@ -453,13 +454,23 @@ class MontgomeryCountyScraper:
         self.setup_driver()
     def setup_driver(self):
         chrome_options = Options()
-        if self.headless:
-            chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
-        self.driver = webdriver.Chrome(options=chrome_options)
+
+        if os.environ.get("CI"):  # running on GitHub
+            remote_url = os.environ.get("SELENIUM_REMOTE_URL", "http://localhost:4444/wd/hub")
+            self.driver = webdriver.Remote(
+                command_executor=remote_url,
+                options=chrome_options,
+                desired_capabilities=DesiredCapabilities.CHROME
+            )
+        else:  # local run
+            if self.headless:
+                chrome_options.add_argument("--headless=new")
+            self.driver = webdriver.Chrome(options=chrome_options)
+
         self.driver.implicitly_wait(2)
     def wait(self, by, value, timeout=10):
         return WebDriverWait(self.driver, timeout).until(EC.presence_of_element_located((by, value)))

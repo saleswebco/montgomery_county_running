@@ -8,20 +8,30 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    container:
-      image: selenium/standalone-chrome:latest
+
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        env:
+          SE_NODE_SESSION_TIMEOUT: 60
+        ports:
+          - 4444:4444
+        options: >-
+          --shm-size="2g"
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Python
         run: |
-          apt-get update && apt-get install -y python3 python3-pip
-          python3 -m pip install -r requirements.txt
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install -r requirements.txt
 
       - name: Run Scraper
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
-          python3 main.py
+          export SELENIUM_REMOTE_URL="http://localhost:4444/wd/hub"
+          python3 run_scraper.py

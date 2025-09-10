@@ -18,7 +18,7 @@ from google.oauth2.service_account import Credentials
 import json
 from typing import List, Dict, Optional, Tuple, Any
 import logging
-
+import sys
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -29,89 +29,68 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger(__name__)
-
 # -----------------------------
 # Credentials Loading Functions
 # -----------------------------
 
-REQUIRED_SA_FIELDS = {
-    "type",
-    "project_id",
-    "private_key_id",
-    "private_key",
-    "client_email",
-    "client_id",
-    "auth_uri",
-    "token_uri",
-    "auth_provider_x509_cert_url",
-    "client_x509_cert_url",
-}
+# -----------------------------
+# Credentials (robust loader)
+# -----------------------------
+def load_service_account_info():
 
-def _normalize_private_key(info: dict) -> dict:
-    """
-    Google private_key often arrives with literal '\\n'. Convert to real newlines.
-    """
-    pk = info.get("private_key")
-    if isinstance(pk, str) and "\\n" in pk:
-        info["private_key"] = pk.replace("\\n", "\n")
-    return info
-
-def _validate_service_account_info(info: dict):
-    missing = [k for k in REQUIRED_SA_FIELDS if k not in info or not info.get(k)]
-    if missing:
-        raise ValueError(f"Service account JSON missing fields: {', '.join(missing)}")
-
-def load_service_account_info() -> dict:
-    """
-    Load service account JSON from:
-    1) GOOGLE_CREDENTIALS_FILE (path to JSON)
-    2) GOOGLE_CREDENTIALS (raw JSON string or path)
-    """
     file_env = os.environ.get("GOOGLE_CREDENTIALS_FILE")
-    logger.info(f"GOOGLE_CREDENTIALS_FILE env: {file_env!r}")
+    raw = os.environ.get("GOOGLE_CREDENTIALS")
+
+    logger.info(f"GOOGLE_CREDENTIALS_FILE set? {bool(file_env)}")
+    logger.info(f"GOOGLE_CREDENTIALS set? {bool(raw)}")
+
+    info = None
+    source = None
 
     if file_env:
-        if os.path.exists(file_env):
-            logger.info("Loading service account from GOOGLE_CREDENTIALS_FILE path.")
+        logger.info(f"GOOGLE_CREDENTIALS_FILE path: {file_env}")
+        if not os.path.exists(file_env):
+            logger.error("ERROR: GOOGLE_CREDENTIALS_FILE path does not exist.")
+            raise ValueError("GOOGLE_CREDENTIALS_FILE path does not exist.")
+        try:
             with open(file_env, "r", encoding="utf-8") as fh:
                 info = json.load(fh)
-            info = _normalize_private_key(info)
-            _validate_service_account_info(info)
-            return info
-        raise ValueError(f"GOOGLE_CREDENTIALS_FILE set but not found: {file_env}")
-
-    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
-    logger.info(f"GOOGLE_CREDENTIALS env present: {bool(creds_raw)}")
-    if not creds_raw:
-        raise ValueError("GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE is required.")
-
-    txt = creds_raw.strip()
-    # If it's JSON
-    if txt.startswith("{"):
-        logger.info("Attempting to load credentials from JSON string in env.")
+            source = "file"
+        except Exception as e:
+            logger.error(f"ERROR reading file JSON: {e}")
+            raise
+    elif raw:
+        logger.info(f"GOOGLE_CREDENTIALS length: {len(raw)}")
         try:
-            info = json.loads(txt)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"GOOGLE_CREDENTIALS is not valid JSON: {e}") from e
-        info = _normalize_private_key(info)
-        _validate_service_account_info(info)
-        return info
+            info = json.loads(raw)
+            source = "env-json"
+        except Exception as e:
+            logger.error(f"ERROR: GOOGLE_CREDENTIALS invalid JSON: {e}")
+            raise
+    else:
+        logger.error("No usable credentials found in GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE.")
+        raise ValueError("No usable credentials found in GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE.")
 
-    # If it's a filesystem path
-    if os.path.exists(txt):
-        logger.info("Attempting to load credentials from file path in GOOGLE_CREDENTIALS.")
-        with open(txt, "r", encoding="utf-8") as fh:
-            info = json.load(fh)
-        info = _normalize_private_key(info)
-        _validate_service_account_info(info)
-        return info
+    # Basic fields
+    client_email = info.get("client_email")
+    project_id = info.get("project_id")
+    private_key_id = info.get("private_key_id")
+    private_key_present = bool(info.get("private_key"))
 
-    raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")
+    logger.info(f"Source: {source}")
+    logger.info(f"client_email: {client_email or '<missing>'}")
+    logger.info(f"project_id: {project_id or '<missing>'}")
+    logger.info(f"private_key_id present? {bool(private_key_id)}")
+    logger.info(f"private_key present? {private_key_present}")
 
-# -----------------------------
-# Scraper
-# -----------------------------
+    # Sanity checks
+    if not client_email or not private_key_present:
+        logger.error("ERROR: Missing client_email or private_key in credentials JSON.")
+        raise ValueError("Missing client_email or private_key in credentials JSON.")
+
+    logger.info("Credentials JSON OK.")
+    return info
+
 
 class MontgomeryCountyScraper:
     def __init__(self, headless=True):
@@ -123,18 +102,18 @@ class MontgomeryCountyScraper:
         """Initialize the Chrome driver with appropriate options"""
         chrome_options = Options()
         if self.headless:
-            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-
-        # Optional: set Chrome binary for CI environments
+        
+        # Set Chrome binary location for GitHub Actions
         if os.path.exists("/usr/bin/google-chrome"):
             chrome_options.binary_location = "/usr/bin/google-chrome"
-
+        
         self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.implicitly_wait(5)
         
@@ -165,8 +144,9 @@ class MontgomeryCountyScraper:
         """Navigate to the case search page"""
         try:
             self.driver.get("https://courtsapp.montcopa.org/psi3/v/search/case")
+            # Wait for page to load
             self.wait_for_element(By.TAG_NAME, "body")
-            time.sleep(3)
+            time.sleep(3)  # Initial page load
             return True
         except Exception as e:
             logging.error(f"Failed to navigate to search page: {e}")
@@ -178,37 +158,43 @@ class MontgomeryCountyScraper:
             end_date = date.today().strftime("%m/%d/%Y")
             
         try:
+            # Wait for search box and enter search term
             search_box = self.wait_for_element(By.ID, "Q")
             search_box.clear()
             search_box.send_keys("probate")
             time.sleep(2)
             
+            # Set filing date from
             from_date = self.wait_for_element(By.ID, "FilingDateFrom")
             from_date.clear()
             from_date.send_keys(start_date)
             time.sleep(2)
             
+            # Set filing date to
             to_date = self.wait_for_element(By.ID, "FilingDateTo")
             to_date.clear()
             to_date.send_keys(end_date)
             time.sleep(2)
             
+            # Click search button
             search_button = self.wait_for_element_clickable(
                 By.XPATH, "//button[contains(@class, 'btn-primary') and contains(., 'Search')]"
             )
             search_button.click()
             time.sleep(5)
             
+            # Wait for results table or no results message
             try:
                 self.wait_for_element(By.ID, "gridViewResults", timeout=10)
                 return True
             except TimeoutException:
+                # Check if no results message appears
                 try:
                     no_results = self.driver.find_element(By.XPATH, "//div[contains(text(), 'No results')]")
                     if no_results:
                         logging.info("No results found for the search criteria")
                         return True
-                except Exception:
+                except:
                     logging.error("Search results did not load properly")
                     return False
                 
@@ -231,67 +217,80 @@ class MontgomeryCountyScraper:
         }
         
         try:
+            # Extract case number - try multiple possible selectors
             try:
                 case_number_element = self.wait_for_element(
                     By.XPATH, "//td[contains(., 'Case Number')]/following-sibling::td"
                 )
                 case_data["case_number"] = case_number_element.text.strip()
-            except Exception:
+            except:
                 try:
                     case_number_element = self.driver.find_element(
                         By.XPATH, "//th[contains(., 'Case Number')]/following-sibling::td"
                     )
                     case_data["case_number"] = case_number_element.text.strip()
-                except Exception:
+                except:
                     logging.warning("Could not find case number")
                 
+            # Extract last filing date
             try:
                 last_filing_element = self.driver.find_element(
                     By.XPATH, "//td[contains(., 'Last Filing Date') or contains(., 'Filing Date')]/following-sibling::td"
                 )
+                # Try to parse and standardize the date format
                 date_text = last_filing_element.text.strip()
-                parsed = None
-                for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d"):
-                    try:
-                        parsed = datetime.datetime.strptime(date_text, fmt)
-                        break
-                    except ValueError:
-                        continue
-                case_data["last_filing_date"] = parsed.strftime("%Y-%m-%d") if parsed else date_text
-            except Exception:
+                try:
+                    # Try to parse various date formats
+                    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d"):
+                        try:
+                            parsed_date = datetime.datetime.strptime(date_text, fmt)
+                            case_data["last_filing_date"] = parsed_date.strftime("%Y-%m-%d")
+                            break
+                        except ValueError:
+                            continue
+                except:
+                    case_data["last_filing_date"] = date_text
+            except:
                 logging.warning("Could not find last filing date")
                 
+            # Extract personal representatives
             try:
                 reps_tables = self.driver.find_elements(
                     By.XPATH, "//table[contains(@id, 'PersonalRepresentatives') or contains(., 'Personal Representative')]"
                 )
+                
                 for table in reps_tables:
-                    rows = table.find_elements(By.TAG_NAME, "tr")[1:]
+                    rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header
+                    
                     for row in rows:
                         cells = row.find_elements(By.TAG_NAME, "td")
-                        if len(cells) >= 3:
+                        if len(cells) >= 3:  # Ensure we have enough cells
                             rep = {
                                 "name": cells[0].text.strip() if cells[0].text.strip() else "",
                                 "role": cells[1].text.strip() if len(cells) > 1 else "",
                                 "address": cells[2].text.strip().replace("\n", ", ") if len(cells) > 2 else ""
                             }
-                            if rep["name"]:
+                            if rep["name"]:  # Only add if we have a name
                                 case_data["personal_representatives"].append(rep)
             except Exception as e:
                 logging.warning(f"Could not extract personal representatives: {e}")
                 
+            # Extract case foundation parties address
             try:
                 parties_tables = self.driver.find_elements(
                     By.XPATH, "//table[contains(@id, 'CaseFoundationParties') or contains(., 'Parties')]"
                 )
+                
                 for table in parties_tables:
-                    rows = table.find_elements(By.TAG_NAME, "tr")[1:]
-                    for row in rows:
-                        cells = row.find_elements(By.TAG_NAME, "td")
-                        if len(cells) >= 5:
-                            address = cells[4].text.strip().replace("\n", ", ")
-                            if address and not case_data["case_foundation_parties_address"]:
-                                case_data["case_foundation_parties_address"] = address
+                    rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header
+                    
+                    if rows:
+                        for row in rows:
+                            cells = row.find_elements(By.TAG_NAME, "td")
+                            if len(cells) >= 5:  # Address is often in the 5th column
+                                address = cells[4].text.strip().replace("\n", ", ")
+                                if address and not case_data["case_foundation_parties_address"]:
+                                    case_data["case_foundation_parties_address"] = address
             except Exception as e:
                 logging.warning(f"Could not extract case foundation parties address: {e}")
                 
@@ -304,17 +303,18 @@ class MontgomeryCountyScraper:
         """Get all search results from the current page"""
         results = []
         try:
+            # Try to find results table
             try:
                 table = self.wait_for_element(By.ID, "gridViewResults", timeout=10)
-                rows = table.find_elements(By.TAG_NAME, "tr")[1:]
-            except Exception:
+                rows = table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header if exists
+            except:
+                # Check if there's a different table structure
                 tables = self.driver.find_elements(By.TAG_NAME, "table")
-                rows = []
                 for table in tables:
                     if "probate" in table.text.lower():
                         rows = table.find_elements(By.TAG_NAME, "tr")[1:]
                         break
-                if not rows:
+                else:
                     logging.info("No results table found")
                     return results
             
@@ -324,7 +324,7 @@ class MontgomeryCountyScraper:
                     case_url = select_link.get_attribute("href")
                     if case_url and "case" in case_url:
                         results.append(case_url)
-                except Exception:
+                except:
                     continue
                     
         except Exception as e:
@@ -342,7 +342,7 @@ class MontgomeryCountyScraper:
                 if button.is_enabled() and button.is_displayed():
                     return True
             return False
-        except Exception:
+        except:
             return False
             
     def go_to_next_page(self):
@@ -376,7 +376,7 @@ class MontgomeryCountyScraper:
             
         all_case_data = []
         page = 1
-        max_pages = 50  # Safety limit
+        max_pages = 50  # Safety limit to prevent infinite loops
         
         while page <= max_pages:
             logging.info(f"Scraping page {page}")
@@ -392,21 +392,26 @@ class MontgomeryCountyScraper:
                 logging.info(f"Scraping case {i+1}/{len(case_urls)}: {case_url}")
                 case_data = self.extract_case_details(case_url)
                 
+                # Only include cases with personal representatives or valid data
                 if case_data["case_number"] or case_data["personal_representatives"]:
                     all_case_data.append(case_data)
                 else:
                     logging.warning(f"Skipping case with no data: {case_url}")
                 
+                # Go back to search results
                 self.driver.back()
                 time.sleep(3)
+                # Wait for results to load
                 try:
                     self.wait_for_element(By.TAG_NAME, "body")
                     self.wait_for_element(By.ID, "gridViewResults", timeout=5)
-                except Exception:
+                except:
+                    # If navigation fails, restart from search page
                     if not self.navigate_to_search_page() or not self.perform_search(start_date, end_date):
                         logging.error("Failed to return to search results")
                         return all_case_data
                 
+            # Check for next page
             if not self.has_next_page():
                 break
                 
@@ -414,7 +419,7 @@ class MontgomeryCountyScraper:
                 break
                 
             page += 1
-            time.sleep(2)
+            time.sleep(2)  # Be respectful to the server
             
         return all_case_data
         
@@ -423,9 +428,6 @@ class MontgomeryCountyScraper:
         if self.driver:
             self.driver.quit()
 
-# -----------------------------
-# Google Sheets Handler (gspread)
-# -----------------------------
 
 class GoogleSheetsHandler:
     def __init__(self, spreadsheet_id):
@@ -448,7 +450,6 @@ class GoogleSheetsHandler:
             self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
             sa_email = service_account_info.get("client_email", "<unknown-service-account>")
             logging.info(f"Successfully connected to Google Sheets. Service account: {sa_email}")
-            logging.info("Ensure this email has Editor access to your spreadsheet.")
         except Exception as e:
             logging.error(f"Error setting up Google Sheets client: {e}")
             raise
@@ -463,6 +464,8 @@ class GoogleSheetsHandler:
             worksheet = self.spreadsheet.add_worksheet(
                 title=sheet_name, rows=1000, cols=20
             )
+            
+            # Set up headers
             headers = [
                 "Case Number", 
                 "Last Filing Date", 
@@ -474,29 +477,43 @@ class GoogleSheetsHandler:
                 "Scrape Timestamp"
             ]
             worksheet.update("A1:H1", [headers])
+            
+            # Format headers
             worksheet.format("A1:H1", {
                 "textFormat": {"bold": True},
                 "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
             })
+            
+            # Freeze header row
             worksheet.freeze(rows=1)
+            
         return worksheet
         
     def get_last_scraped_date(self, sheet_name):
         """Get the last scraped date from the specified sheet"""
         try:
             worksheet = self.get_or_create_sheet(sheet_name)
+            # Get all dates from column B (Last Filing Date)
             dates = worksheet.col_values(2)
+            # Skip header and find the most recent date
             if len(dates) > 1:
+                # Get all dates, convert to datetime objects for comparison
                 date_objects = []
                 for date_str in dates[1:]:
-                    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d"):
-                        try:
-                            date_obj = datetime.datetime.strptime(date_str, fmt).date()
-                            date_objects.append(date_obj)
-                            break
-                        except ValueError:
-                            continue
+                    try:
+                        # Try to parse various date formats
+                        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d"):
+                            try:
+                                date_obj = datetime.datetime.strptime(date_str, fmt).date()
+                                date_objects.append(date_obj)
+                                break
+                            except ValueError:
+                                continue
+                    except:
+                        continue
+                
                 if date_objects:
+                    # Return the most recent date
                     latest_date = max(date_objects)
                     return latest_date.strftime("%m/%d/%Y")
             return None
@@ -508,7 +525,9 @@ class GoogleSheetsHandler:
         """Get all case numbers from the specified sheet"""
         try:
             worksheet = self.get_or_create_sheet(sheet_name)
+            # Get all case numbers from column A
             case_numbers = worksheet.col_values(1)
+            # Skip header and return all case numbers
             return set(case_numbers[1:]) if len(case_numbers) > 1 else set()
         except Exception as e:
             logging.error(f"Error getting all case numbers: {e}")
@@ -517,35 +536,27 @@ class GoogleSheetsHandler:
     def update_sheet(self, sheet_name, case_data, existing_case_numbers):
         """Update the sheet with the given case data, skipping existing cases"""
         worksheet = self.get_or_create_sheet(sheet_name)
+        
+        # Prepare data for writing
         rows = []
         for case in case_data:
+            # Skip if case already exists
             if case["case_number"] in existing_case_numbers:
                 logging.info(f"Skipping existing case: {case['case_number']}")
                 continue
+                
+            # Validate we have at least a case number or representatives
             if not case["case_number"] and not case["personal_representatives"]:
                 logging.warning(f"Skipping invalid case with no data: {case['case_details_url']}")
                 continue
-            if case["personal_representatives"]:
-                for rep in case["personal_representatives"]:
-                    row = [
-                        case["case_number"],
-                        case["last_filing_date"],
-                        rep.get("name", ""),
-                        rep.get("role", ""),
-                        rep.get("address", ""),
-                        case["case_foundation_parties_address"],
-                        case["case_details_url"],
-                        case["scrape_timestamp"]
-                    ]
-                    rows.append(row)
-            else:
-                # No reps; still record the case
+                
+            for rep in case["personal_representatives"]:
                 row = [
                     case["case_number"],
                     case["last_filing_date"],
-                    "",
-                    "",
-                    "",
+                    rep["name"],
+                    rep["role"],
+                    rep["address"],
                     case["case_foundation_parties_address"],
                     case["case_details_url"],
                     case["scrape_timestamp"]
@@ -553,58 +564,69 @@ class GoogleSheetsHandler:
                 rows.append(row)
                 
         if rows:
+            # Append new data
             worksheet.append_rows(rows)
             logging.info(f"Added {len(rows)} new rows to sheet {sheet_name}")
+            
+            # Auto-resize columns
             try:
-                worksheet.columns_auto_resize(0, 8)
-            except Exception:
+                worksheet.columns_auto_resize(0, 8)  # Columns A to H
+            except:
                 logging.warning("Could not auto-resize columns")
         else:
             logging.info(f"No new data to add to sheet {sheet_name}")
 
-# -----------------------------
-# Helpers
-# -----------------------------
 
 def get_monthly_date_ranges(start_date_str=None):
     """Generate date ranges for each month from start_date to current date"""
     if start_date_str:
         try:
+            # Parse the start date
             start_date = datetime.datetime.strptime(start_date_str, "%m/%d/%Y").date()
         except ValueError:
             logging.error(f"Invalid start date format: {start_date_str}. Using default.")
-            start_date = datetime.date(2025, 1, 1)
+            start_date = datetime.date(2025, 1, 1)  # Default start date
     else:
-        start_date = datetime.date(2025, 1, 1)
+        start_date = datetime.date(2025, 1, 1)  # Default start date
     
     end_date = datetime.date.today()
+    
+    # Generate monthly ranges
     date_ranges = []
     current = start_date
     
     while current <= end_date:
+        # First day of the month
         first_day = current.replace(day=1)
+        
+        # Last day of the month
         if current.month == 12:
             next_month = current.replace(year=current.year+1, month=1, day=1)
         else:
             next_month = current.replace(month=current.month+1, day=1)
+        
         last_day = next_month - datetime.timedelta(days=1)
+        
+        # If last_day is beyond today, use today
         if last_day > end_date:
             last_day = end_date
+        
+        # Add the range if it's valid
         if first_day <= last_day:
             date_ranges.append((
                 first_day.strftime("%m/%d/%Y"),
                 last_day.strftime("%m/%d/%Y"),
-                first_day.strftime("%b %Y")
+                first_day.strftime("%b %Y")  # Sheet name
             ))
+        
+        # Move to next month
         current = next_month
     
     return date_ranges
 
-# -----------------------------
-# Main
-# -----------------------------
 
 def main():
+    # Configuration
     HEADLESS = True
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     
@@ -618,15 +640,20 @@ def main():
         logging.error(f"Failed to initialize Google Sheets handler: {e}")
         return
         
+    # Initialize scraper
     scraper = MontgomeryCountyScraper(headless=HEADLESS)
     
     try:
+        # Get the last scraped date from the most recent sheet
         current_month = datetime.datetime.now().strftime("%b %Y")
         last_scraped_date = sheets_handler.get_last_scraped_date(current_month)
+        
+        # If no data in current month, check previous months
         if not last_scraped_date:
             prev_month = (datetime.datetime.now() - datetime.timedelta(days=31)).strftime("%b %Y")
             last_scraped_date = sheets_handler.get_last_scraped_date(prev_month)
         
+        # Generate monthly date ranges from the last scraped date or default
         date_ranges = get_monthly_date_ranges(last_scraped_date)
         
         if not date_ranges:
@@ -637,15 +664,25 @@ def main():
         
         for start_date, end_date, sheet_name in date_ranges:
             logging.info(f"Processing {sheet_name}: {start_date} to {end_date}")
+            
+            # Get all existing case numbers for this month's sheet
             existing_case_numbers = sheets_handler.get_all_case_numbers(sheet_name)
             logging.info(f"Found {len(existing_case_numbers)} existing cases in {sheet_name}")
+            
+            # Scrape cases for this date range
             case_data = scraper.scrape_cases(start_date=start_date, end_date=end_date)
+            
             if case_data:
                 logging.info(f"Successfully scraped {len(case_data)} cases for {sheet_name}")
+                
+                # Update the sheet with new cases only
                 sheets_handler.update_sheet(sheet_name, case_data, existing_case_numbers)
+                    
                 logging.info(f"Processed cases for {sheet_name}")
             else:
                 logging.info(f"No new cases found for {sheet_name}")
+            
+            # Small delay between months
             time.sleep(2)
             
     except Exception as e:
@@ -654,6 +691,7 @@ def main():
     finally:
         scraper.close()
         logging.info("Scraping completed")
+
 
 if __name__ == "__main__":
     main()

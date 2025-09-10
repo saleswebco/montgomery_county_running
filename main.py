@@ -429,9 +429,6 @@
 
 
 
-
-
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
@@ -444,9 +441,9 @@ import re
 import requests
 from bs4 import BeautifulSoup
 import backoff
-import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # Logging
 logging.basicConfig(
@@ -580,40 +577,92 @@ class MontgomeryCountyScraperDriverless:
         return all_cases
 
 # -----------------------------
-# Google Sheets Handler
+# Google Sheets Handler (Direct API - No gspread)
 # -----------------------------
 class GoogleSheetsHandler:
     def __init__(self, spreadsheet_id: str):
         self.spreadsheet_id = spreadsheet_id
         sa_info = load_service_account_info()
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.metadata.readonly"
-        ]
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
-        self.client = gspread.authorize(creds)
-        self.spreadsheet = self.client.open_by_key(spreadsheet_id)
+        self.service = build('sheets', 'v4', credentials=creds)
+        self.sheets = self.service.spreadsheets()
 
     def get_or_create_sheet(self, sheet_name: str):
+        """Get sheet info or create if it doesn't exist"""
         try:
-            return self.spreadsheet.worksheet(sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            ws = self.spreadsheet.add_worksheet(sheet_name, 1000, 20)
+            # Get spreadsheet metadata
+            spreadsheet = self.sheets.get(spreadsheetId=self.spreadsheet_id).execute()
+            sheets = spreadsheet.get('sheets', [])
+            
+            # Check if sheet exists
+            for sheet in sheets:
+                if sheet['properties']['title'] == sheet_name:
+                    return sheet['properties']['sheetId']
+            
+            # Sheet doesn't exist, create it
+            requests_body = {
+                'requests': [{
+                    'addSheet': {
+                        'properties': {
+                            'title': sheet_name,
+                            'gridProperties': {
+                                'rowCount': 1000,
+                                'columnCount': 10
+                            }
+                        }
+                    }
+                }]
+            }
+            
+            response = self.sheets.batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body=requests_body
+            ).execute()
+            
+            sheet_id = response['replies'][0]['addSheet']['properties']['sheetId']
+            
+            # Add headers
             headers = [
-                "Case Number","Last Filing Date",
-                "Representative Name","Role",
-                "Address","Case Foundation Parties Address"
+                "Case Number", "Last Filing Date",
+                "Representative Name", "Role",
+                "Address", "Case Foundation Parties Address"
             ]
-            ws.update("A1:F1", [headers])
-            return ws
+            
+            self.sheets.values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!A1:F1",
+                valueInputOption='RAW',
+                body={'values': [headers]}
+            ).execute()
+            
+            return sheet_id
+            
+        except HttpError as e:
+            logging.error(f"Error managing sheet {sheet_name}: {e}")
+            raise
 
     def get_all_case_numbers(self, sheet_name: str) -> set:
-        ws = self.get_or_create_sheet(sheet_name)
-        vals = ws.col_values(1)[1:]
-        return set(vals)
+        """Get all existing case numbers from the sheet"""
+        self.get_or_create_sheet(sheet_name)
+        
+        try:
+            result = self.sheets.values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"{sheet_name}!A2:A"  # Skip header row
+            ).execute()
+            
+            values = result.get('values', [])
+            return set(row[0] for row in values if row)
+            
+        except HttpError as e:
+            logging.error(f"Error reading case numbers from {sheet_name}: {e}")
+            return set()
 
     def update_sheet(self, sheet_name: str, cases: List[Dict[str, Any]], existing: set):
-        ws = self.get_or_create_sheet(sheet_name)
+        """Update sheet with new cases"""
+        self.get_or_create_sheet(sheet_name)
+        
         rows = []
         for c in cases:
             if c["case_number"] in existing:
@@ -622,14 +671,37 @@ class GoogleSheetsHandler:
                 rows.append([
                     c["case_number"],
                     c["last_filing_date"],
-                    rep.get("name",""),
-                    rep.get("role",""),
-                    rep.get("address",""),
-                    c.get("case_foundation_parties_address","")
+                    rep.get("name", ""),
+                    rep.get("role", ""),
+                    rep.get("address", ""),
+                    c.get("case_foundation_parties_address", "")
                 ])
+        
         if rows:
-            ws.append_rows(rows)
-            logging.info(f"Inserted {len(rows)} rows in {sheet_name}")
+            try:
+                # Find the next empty row
+                result = self.sheets.values().get(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=f"{sheet_name}!A:A"
+                ).execute()
+                
+                existing_rows = len(result.get('values', []))
+                start_row = existing_rows + 1
+                
+                range_name = f"{sheet_name}!A{start_row}:F{start_row + len(rows) - 1}"
+                
+                self.sheets.values().update(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=range_name,
+                    valueInputOption='RAW',
+                    body={'values': rows}
+                ).execute()
+                
+                logging.info(f"Inserted {len(rows)} rows in {sheet_name}")
+                
+            except HttpError as e:
+                logging.error(f"Error updating sheet {sheet_name}: {e}")
+                raise
 
 # -----------------------------
 # Date Ranges

@@ -1010,9 +1010,6 @@
 
 
 
-
-
-
 import os
 import time
 import datetime
@@ -1043,6 +1040,32 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# -----------------------------
+# Credentials Loading Functions
+# -----------------------------
+def load_service_account_info():
+    """Load Google service account credentials from file or environment variable"""
+    file_env = os.environ.get("GOOGLE_CREDENTIALS_FILE")
+    if file_env:
+        if os.path.exists(file_env):
+            with open(file_env, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        raise ValueError(f"GOOGLE_CREDENTIALS_FILE set but not found: {file_env}")
+
+    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
+    if not creds_raw:
+        raise ValueError("GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE is required.")
+
+    txt = creds_raw.strip()
+    if txt.startswith("{"):
+        return json.loads(txt)
+
+    if os.path.exists(creds_raw):
+        with open(creds_raw, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+
+    raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")
 
 class MontgomeryCountyScraper:
     def __init__(self, headless=True):
@@ -1159,9 +1182,7 @@ class MontgomeryCountyScraper:
             "case_number": "",
             "last_filing_date": "",
             "personal_representatives": [],
-            "case_foundation_parties_address": "",
-            "case_details_url": case_url,
-            "scrape_timestamp": datetime.datetime.now().isoformat()
+            "case_foundation_parties_address": ""
         }
         
         try:
@@ -1381,26 +1402,35 @@ class MontgomeryCountyScraper:
 
 
 class GoogleSheetsHandler:
-    def __init__(self, credentials_json, spreadsheet_id):
-        self.credentials_json = credentials_json
+    def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
         self.client = None
         self.spreadsheet = None
         self.setup_client()
         
     def setup_client(self):
-        """Set up the Google Sheets client"""
+        """Set up the Google Sheets client using the proper credential loading"""
         try:
+            # Load service account info using the provided function
+            service_account_info = load_service_account_info()
+            
             scopes = [
                 "https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"
             ]
+            
             credentials = Credentials.from_service_account_info(
-                json.loads(self.credentials_json), scopes=scopes
+                service_account_info, scopes=scopes
             )
+            
             self.client = gspread.authorize(credentials)
             self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-            logging.info("Successfully connected to Google Sheets")
+            
+            # Log service account email for verification
+            sa_email = service_account_info.get("client_email", "<unknown-service-account>")
+            logging.info(f"Successfully connected to Google Sheets. Service account: {sa_email}")
+            logging.info("Ensure this email has Editor access to your spreadsheet.")
+            
         except Exception as e:
             logging.error(f"Error setting up Google Sheets client: {e}")
             raise
@@ -1506,7 +1536,9 @@ class GoogleSheetsHandler:
                     rep["name"],
                     rep["role"],
                     rep["address"],
-                    case["case_foundation_parties_address"]
+                    case["case_foundation_parties_address"],
+                    case["case_details_url"],
+                    case["scrape_timestamp"]
                 ]
                 rows.append(row)
                 
@@ -1576,17 +1608,16 @@ def main():
     # Configuration
     HEADLESS = True
     
-    # Get credentials from environment
-    google_credentials = os.environ.get("GOOGLE_CREDENTIALS")
+    # Get spreadsheet ID from environment
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     
-    if not google_credentials or not spreadsheet_id:
-        logging.error("Error: GOOGLE_CREDENTIALS and SPREADSHEET_ID environment variables are required")
+    if not spreadsheet_id:
+        logging.error("Error: SPREADSHEET_ID environment variable is required")
         return
         
     # Initialize Google Sheets handler
     try:
-        sheets_handler = GoogleSheetsHandler(google_credentials, spreadsheet_id)
+        sheets_handler = GoogleSheetsHandler(spreadsheet_id)
     except Exception as e:
         logging.error(f"Failed to initialize Google Sheets handler: {e}")
         return

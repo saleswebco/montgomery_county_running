@@ -30,7 +30,8 @@ jobs:
 
     - name: Run scraper
       env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        # Correctly pass the multiline JSON secret as a single line
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS | toJSON }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       run: python main.py
 
@@ -39,7 +40,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: montgomery-scraper-logs
-        path: montgomery_scraper.log
+        path: scraper.log # Updated log file name
 
     - name: Notify on failure
       if: failure()

@@ -1043,40 +1043,13 @@ logging.basicConfig(
 # Credentials Loading Functions
 # -----------------------------
 def load_service_account_info():
-    """Load Google service account credentials from file or environment variable"""
-    file_env = os.environ.get("GOOGLE_CREDENTIALS_FILE")
-    if file_env:
-        if os.path.exists(file_env):
-            with open(file_env, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        raise ValueError(f"GOOGLE_CREDENTIALS_FILE set but not found: {file_env}")
-
     creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
     if not creds_raw:
-        raise ValueError("GOOGLE_CREDENTIALS or GOOGLE_CREDENTIALS_FILE is required.")
+        raise ValueError("GOOGLE_CREDENTIALS environment variable is required.")
 
-    txt = creds_raw.strip()
+    txt = creds_raw.strip().replace("\\n", "\n")  # Fix escaped newlines
+    return json.loads(txt)
 
-    if txt.startswith("{"):
-        # Fix escaped newlines in private_key
-        txt = txt.replace("\\n", "\n")
-        try:
-            return json.loads(txt)
-        except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse GOOGLE_CREDENTIALS as JSON: {e}")
-            # Try to fix common JSON issues
-            try:
-                # Handle single quotes instead of double quotes
-                txt = txt.replace("'", '"')
-                return json.loads(txt)
-            except:
-                raise ValueError("GOOGLE_CREDENTIALS is not valid JSON")
-
-    if os.path.exists(creds_raw):
-        with open(creds_raw, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-
-    raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")
 
 class MontgomeryCountyScraper:
     def __init__(self, headless=True):
@@ -1426,28 +1399,19 @@ class GoogleSheetsHandler:
         self.setup_client()
         
     def setup_client(self):
-        """Set up the Google Sheets client using the proper credential loading"""
         try:
-            # Load service account info using the provided function
             service_account_info = load_service_account_info()
-            
             scopes = [
                 "https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"
             ]
-            
             credentials = Credentials.from_service_account_info(
                 service_account_info, scopes=scopes
             )
-            
             self.client = gspread.authorize(credentials)
             self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
-            
-            # Log service account email for verification
             sa_email = service_account_info.get("client_email", "<unknown-service-account>")
             logging.info(f"Successfully connected to Google Sheets. Service account: {sa_email}")
-            logging.info("Ensure this email has Editor access to your spreadsheet.")
-            
         except Exception as e:
             logging.error(f"Error setting up Google Sheets client: {e}")
             raise
@@ -1626,15 +1590,12 @@ def get_monthly_date_ranges(start_date_str=None):
 def main():
     # Configuration
     HEADLESS = True
-    
-    # Get spreadsheet ID from environment
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     
     if not spreadsheet_id:
         logging.error("Error: SPREADSHEET_ID environment variable is required")
         return
         
-    # Initialize Google Sheets handler
     try:
         sheets_handler = GoogleSheetsHandler(spreadsheet_id)
     except Exception as e:

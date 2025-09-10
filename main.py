@@ -459,19 +459,19 @@ class MontgomeryCountyScraper:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
 
-        if os.environ.get("CI"):  # running on GitHub
-            remote_url = os.environ.get("SELENIUM_REMOTE_URL", "http://localhost:4444/wd/hub")
+        if os.environ.get("SELENIUM_REMOTE_URL"):  # GitHub Actions
+            remote_url = os.environ["SELENIUM_REMOTE_URL"]
             self.driver = webdriver.Remote(
                 command_executor=remote_url,
-                options=chrome_options,
-                desired_capabilities=DesiredCapabilities.CHROME
+                options=chrome_options
             )
-        else:  # local run
+        else:  # local dev
             if self.headless:
                 chrome_options.add_argument("--headless=new")
             self.driver = webdriver.Chrome(options=chrome_options)
 
         self.driver.implicitly_wait(2)
+
     def wait(self, by, value, timeout=10):
         return WebDriverWait(self.driver, timeout).until(EC.presence_of_element_located((by, value)))
     def navigate(self):
@@ -565,13 +565,29 @@ def sheets_client():
 
 def get_last_scraped_date(svc, spreadsheet_id, sheet_name):
     try:
-        res=svc.values().get(spreadsheetId=spreadsheet_id,range=f"'{sheet_name}'!B2:B").execute()
-        dates=[r[0] for r in res.get("values",[]) if r]
-        if not dates: return None
-        parsed=[datetime.datetime.strptime(d,"%Y-%m-%d").date() if "-" in d else datetime.datetime.strptime(d,"%m/%d/%Y").date() for d in dates]
-        return max(parsed)
+        # Column 2 = "Last Filing Date", start from row 2 (skip header)
+        res = svc.values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{sheet_name}'!B2:B"
+        ).execute()
+        vals = [r[0] for r in res.get("values", []) if r]
+
+        if not vals:
+            return None
+
+        parsed = []
+        for d in vals:
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    parsed.append(datetime.datetime.strptime(d, fmt).date())
+                    break
+                except ValueError:
+                    continue
+        return max(parsed) if parsed else None
+
     except Exception as e:
-        print("last date error",e); return None
+        print(f"⚠ Error reading last date from {sheet_name}: {e}")
+        return None
 
 def append_rows(svc, spreadsheet_id, sheet_name, rows):
     if not rows: return
@@ -587,39 +603,45 @@ def append_rows(svc, spreadsheet_id, sheet_name, rows):
 # Main Logic
 # -----------------------------
 def main():
-    spreadsheet_id=os.environ.get("SPREADSHEET_ID")
-    svc=sheets_client()
-    today=date.today()
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID")
+    svc = sheets_client()
+    today = date.today()
 
-    # Determine current month sheet
-    month_sheet=today.strftime("%Y-%m")
-    last_date=get_last_scraped_date(svc, spreadsheet_id, month_sheet)
+    # Monthly sheet in "Sep 2025" format
+    month_sheet = today.strftime("%b %Y")
+
+    last_date = get_last_scraped_date(svc, spreadsheet_id, month_sheet)
+
     if last_date:
-        start_date=(last_date+timedelta(days=1)).strftime("%m/%d/%Y")
+        start_date = (last_date + timedelta(days=1)).strftime("%m/%d/%Y")
     else:
-        start_date=today.replace(day=1).strftime("%m/%d/%Y")
-    end_date=today.strftime("%m/%d/%Y")
-    print(f"Scraping {start_date} → {end_date}")
+        # If no rows yet → start from 1st of month
+        start_date = today.replace(day=1).strftime("%m/%d/%Y")
 
-    scraper=MontgomeryCountyScraper(headless=True)
+    end_date = today.strftime("%m/%d/%Y")
+
+    print(f"Scraping {start_date} → {end_date} into {month_sheet}")
+
+    scraper = MontgomeryCountyScraper(headless=True)
     try:
-        data=scraper.scrape(start_date,end_date)
-        rows=[]
+        data = scraper.scrape(start_date, end_date)
+        rows = []
         for case in data:
             for rep in case["personal_representatives"]:
                 rows.append([
                     case["case_number"],
                     case["last_filing_date"],
-                    rep["name"], rep["role"], rep["address"],
-                    case["case_foundation_parties_address"]
+                    rep["name"],
+                    rep["role"],
+                    rep["address"],
+                    case["case_foundation_parties_address"],
                 ])
         if rows:
-            append_rows(svc,spreadsheet_id,month_sheet,rows)
-            append_rows(svc,spreadsheet_id,"All Data",rows)
-            # summary: just count added rows
-            append_rows(svc,spreadsheet_id,"Summary",[[today.strftime("%Y-%m-%d"),len(rows)]])
+            append_rows(svc, spreadsheet_id, month_sheet, rows)
+            append_rows(svc, spreadsheet_id, "All Data", rows)
+            append_rows(svc, spreadsheet_id, "Summary", [[today.strftime("%Y-%m-%d"), len(rows)]])
         else:
-            print("No new rows found")
+            print("✓ No new rows")
     finally:
         scraper.close()
 

@@ -34,4 +34,4 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
           export SELENIUM_REMOTE_URL="http://localhost:4444/wd/hub"
-          python3 run_scraper.py
+          python3 main.py

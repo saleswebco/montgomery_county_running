@@ -8,7 +8,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -23,24 +23,19 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Install Chrome
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-chromedriver
-
     - name: Run scraper
       env:
-        # Correctly pass the multiline JSON secret as a single line
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS | toJSON }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      run: python main.py
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      run: |
+        python main.py
 
     - name: Upload logs on failure
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: montgomery-scraper-logs
-        path: scraper.log # Updated log file name
+        path: montgomery_scraper.log
 
     - name: Notify on failure
       if: failure()

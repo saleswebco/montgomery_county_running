@@ -1008,8 +1008,6 @@
 #     main()
 
 
-
-
 import os
 import time
 import datetime
@@ -1045,6 +1043,7 @@ logging.basicConfig(
 # Credentials Loading Functions
 # -----------------------------
 def load_service_account_info():
+    """Load Google service account credentials from file or environment variable"""
     file_env = os.environ.get("GOOGLE_CREDENTIALS_FILE")
     if file_env:
         if os.path.exists(file_env):
@@ -1059,16 +1058,25 @@ def load_service_account_info():
     txt = creds_raw.strip()
 
     if txt.startswith("{"):
-        # Normalize escaped newlines in private_key
+        # Fix escaped newlines in private_key
         txt = txt.replace("\\n", "\n")
-        return json.loads(txt)
+        try:
+            return json.loads(txt)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse GOOGLE_CREDENTIALS as JSON: {e}")
+            # Try to fix common JSON issues
+            try:
+                # Handle single quotes instead of double quotes
+                txt = txt.replace("'", '"')
+                return json.loads(txt)
+            except:
+                raise ValueError("GOOGLE_CREDENTIALS is not valid JSON")
 
-    if os.path.exists(txt):
-        with open(txt, "r", encoding="utf-8") as fh:
+    if os.path.exists(creds_raw):
+        with open(creds_raw, "r", encoding="utf-8") as fh:
             return json.load(fh)
 
     raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")
-
 
 class MontgomeryCountyScraper:
     def __init__(self, headless=True):
@@ -1087,6 +1095,10 @@ class MontgomeryCountyScraper:
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        
+        # Set Chrome binary location for GitHub Actions
+        if os.path.exists("/usr/bin/google-chrome"):
+            chrome_options.binary_location = "/usr/bin/google-chrome"
         
         self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.implicitly_wait(5)
@@ -1185,7 +1197,9 @@ class MontgomeryCountyScraper:
             "case_number": "",
             "last_filing_date": "",
             "personal_representatives": [],
-            "case_foundation_parties_address": ""
+            "case_foundation_parties_address": "",
+            "case_details_url": case_url,
+            "scrape_timestamp": datetime.datetime.now().isoformat()
         }
         
         try:
@@ -1456,7 +1470,9 @@ class GoogleSheetsHandler:
                 "Representative Name", 
                 "Role", 
                 "Address", 
-                "Case Foundation Parties Address"
+                "Case Foundation Parties Address",
+                "Case Details URL",
+                "Scrape Timestamp"
             ]
             worksheet.update("A1:H1", [headers])
             
@@ -1552,7 +1568,7 @@ class GoogleSheetsHandler:
             
             # Auto-resize columns
             try:
-                worksheet.columns_auto_resize(0, 7)  # Columns A to H
+                worksheet.columns_auto_resize(0, 8)  # Columns A to H
             except:
                 logging.warning("Could not auto-resize columns")
         else:

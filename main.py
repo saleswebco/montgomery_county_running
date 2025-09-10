@@ -661,70 +661,7 @@ def update_summary(svc, spreadsheet_id, month_name, new_count):
     except Exception as e:
         print(f"⚠ Error updating Summary: {e}")
 
-def apply_conditional_formatting(svc, spreadsheet_id, sheet_name):
-    """Apply conditional formatting on Filing Date column (B)"""
-    try:
-        # Get sheetId from metadata
-        metadata = svc.get(spreadsheetId=spreadsheet_id).execute()
-        sheet_id = None
-        for s in metadata["sheets"]:
-            if s["properties"]["title"] == sheet_name:
-                sheet_id = s["properties"]["sheetId"]
-                break
-        if sheet_id is None:
-            return
 
-        body = {
-            "requests": [
-                # Red fill if date in last 7 days
-                {
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [
-                                {"sheetId": sheet_id, "startColumnIndex": 1, "endColumnIndex": 2}
-                            ],
-                            "booleanRule": {
-                                "condition": {
-                                    "type": "DATE_IS_WITHIN",
-                                    "values": [{"userEnteredValue": "7"}]
-                                },
-                                "format": {
-                                    "backgroundColor": {"red": 1.0, "green": 0.8, "blue": 0.8}
-                                }
-                            }
-                        },
-                        "index": 0
-                    }
-                },
-                # Yellow fill if date in last 30 days
-                {
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [
-                                {"sheetId": sheet_id, "startColumnIndex": 1, "endColumnIndex": 2}
-                            ],
-                            "booleanRule": {
-                                "condition": {
-                                    "type": "DATE_IS_WITHIN",
-                                    "values": [{"userEnteredValue": "30"}]
-                                },
-                                "format": {
-                                    "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 0.6}
-                                }
-                            }
-                        },
-                        "index": 1
-                    }
-                }
-            ]
-        }
-        svc.batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
-        print(f"✓ Applied conditional formatting to {sheet_name}")
-
-    except Exception as e:
-        print(f"⚠ Could not apply formatting on {sheet_name}: {e}")
-
-        
 # -----------------------------
 # Main Logic
 # -----------------------------
@@ -739,8 +676,6 @@ def main():
     ensure_sheet_exists(svc, spreadsheet_id, "All Data")
     ensure_sheet_exists(svc, spreadsheet_id, "Summary")
 
-    # Apply formatting to monthly tab
-    apply_conditional_formatting(svc, spreadsheet_id, month_sheet)
 
     last_date = get_last_scraped_date(svc, spreadsheet_id, month_sheet)
 

@@ -33,7 +33,7 @@ jobs:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       run: |
-        python montgomery_scraper.py
+        python main.py
         
     - name: Notify on failure
       if: failure()

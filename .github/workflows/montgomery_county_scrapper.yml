@@ -2,7 +2,7 @@ name: Montgomery County Scraper
 
 on:
   schedule:
-    - cron: '10 13 * * *'  # Run daily at 2 AM UTC
+    - cron: '10 13 * * *'  # Run daily at 8 AM UTC (3 AM EST)
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
@@ -28,10 +28,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y chromium-chromedriver
 
-    - name: Run scraper
+    - name: Decode Google credentials
+      run: |
+        echo "${GOOGLE_CREDENTIALS}" > google-credentials.json
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+    - name: Run scraper
+      env:
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        GOOGLE_CREDENTIALS_FILE: google-credentials.json
       run: python main.py
 
     - name: Upload logs on failure

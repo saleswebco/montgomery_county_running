@@ -1059,12 +1059,12 @@ def load_service_account_info():
     txt = creds_raw.strip()
 
     if txt.startswith("{"):
-        # Fix escaped newlines in private_key
+        # Normalize escaped newlines in private_key
         txt = txt.replace("\\n", "\n")
         return json.loads(txt)
 
-    if os.path.exists(creds_raw):
-        with open(creds_raw, "r", encoding="utf-8") as fh:
+    if os.path.exists(txt):
+        with open(txt, "r", encoding="utf-8") as fh:
             return json.load(fh)
 
     raise ValueError("GOOGLE_CREDENTIALS is neither valid JSON nor an existing file path.")

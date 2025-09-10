@@ -599,6 +599,132 @@ def append_rows(svc, spreadsheet_id, sheet_name, rows):
     ).execute()
     print(f"✓ Appended {len(rows)} rows to {sheet_name}")
 
+def normalize_date(datestr):
+    """Convert various formats into YYYY-MM-DD"""
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.datetime.strptime(datestr, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return datestr  # fallback unchanged
+
+
+def ensure_sheet_exists(svc, spreadsheet_id, sheet_name):
+    """Create a sheet if missing"""
+    try:
+        svc.get(spreadsheetId=spreadsheet_id).execute()
+        sheets_metadata = svc.get(spreadsheetId=spreadsheet_id).execute()
+        titles = [s["properties"]["title"] for s in sheets_metadata["sheets"]]
+        if sheet_name not in titles:
+            body = {"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]}
+            svc.batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+            print(f"✓ Created new sheet: {sheet_name}")
+    except Exception as e:
+        print(f"⚠ Could not ensure sheet {sheet_name}: {e}")
+
+
+def update_summary(svc, spreadsheet_id, month_name, new_count):
+    """Update monthly total instead of appending daily"""
+    try:
+        res = svc.values().get(
+            spreadsheetId=spreadsheet_id,
+            range="'Summary'!A:B"
+        ).execute()
+        rows = res.get("values", [])
+
+        updated = False
+        for i, row in enumerate(rows, start=1):
+            if row and row[0] == month_name:
+                # Update existing month count
+                old_count = int(row[1]) if len(row) > 1 and row[1].isdigit() else 0
+                new_total = old_count + new_count
+                svc.values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"'Summary'!B{i}",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [[new_total]]}
+                ).execute()
+                updated = True
+                print(f"✓ Updated Summary: {month_name} = {new_total}")
+                break
+
+        if not updated:
+            # Append new month row
+            svc.values().append(
+                spreadsheetId=spreadsheet_id,
+                range="'Summary'!A:B",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[month_name, new_count]]}
+            ).execute()
+            print(f"✓ Added Summary row: {month_name} = {new_count}")
+
+    except Exception as e:
+        print(f"⚠ Error updating Summary: {e}")
+
+def apply_conditional_formatting(svc, spreadsheet_id, sheet_name):
+    """Apply conditional formatting on Filing Date column (B)"""
+    try:
+        # Get sheetId from metadata
+        metadata = svc.get(spreadsheetId=spreadsheet_id).execute()
+        sheet_id = None
+        for s in metadata["sheets"]:
+            if s["properties"]["title"] == sheet_name:
+                sheet_id = s["properties"]["sheetId"]
+                break
+        if sheet_id is None:
+            return
+
+        body = {
+            "requests": [
+                # Red fill if date in last 7 days
+                {
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [
+                                {"sheetId": sheet_id, "startColumnIndex": 1, "endColumnIndex": 2}
+                            ],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "DATE_IS_WITHIN",
+                                    "values": [{"userEnteredValue": "7"}]
+                                },
+                                "format": {
+                                    "backgroundColor": {"red": 1.0, "green": 0.8, "blue": 0.8}
+                                }
+                            }
+                        },
+                        "index": 0
+                    }
+                },
+                # Yellow fill if date in last 30 days
+                {
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [
+                                {"sheetId": sheet_id, "startColumnIndex": 1, "endColumnIndex": 2}
+                            ],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "DATE_IS_WITHIN",
+                                    "values": [{"userEnteredValue": "30"}]
+                                },
+                                "format": {
+                                    "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 0.6}
+                                }
+                            }
+                        },
+                        "index": 1
+                    }
+                }
+            ]
+        }
+        svc.batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+        print(f"✓ Applied conditional formatting to {sheet_name}")
+
+    except Exception as e:
+        print(f"⚠ Could not apply formatting on {sheet_name}: {e}")
+
+        
 # -----------------------------
 # Main Logic
 # -----------------------------
@@ -609,6 +735,12 @@ def main():
 
     # Monthly sheet in "Sep 2025" format
     month_sheet = today.strftime("%b %Y")
+    ensure_sheet_exists(svc, spreadsheet_id, month_sheet)
+    ensure_sheet_exists(svc, spreadsheet_id, "All Data")
+    ensure_sheet_exists(svc, spreadsheet_id, "Summary")
+
+    # Apply formatting to monthly tab
+    apply_conditional_formatting(svc, spreadsheet_id, month_sheet)
 
     last_date = get_last_scraped_date(svc, spreadsheet_id, month_sheet)
 
@@ -630,20 +762,20 @@ def main():
             for rep in case["personal_representatives"]:
                 rows.append([
                     case["case_number"],
-                    case["last_filing_date"],
+                    normalize_date(case["last_filing_date"]),
                     rep["name"],
                     rep["role"],
                     rep["address"],
                     case["case_foundation_parties_address"],
                 ])
+
         if rows:
             append_rows(svc, spreadsheet_id, month_sheet, rows)
             append_rows(svc, spreadsheet_id, "All Data", rows)
-            append_rows(svc, spreadsheet_id, "Summary", [[today.strftime("%Y-%m-%d"), len(rows)]])
+            update_summary(svc, spreadsheet_id, month_sheet, len(rows))
         else:
             print("✓ No new rows")
     finally:
         scraper.close()
-
 if __name__=="__main__":
     main()

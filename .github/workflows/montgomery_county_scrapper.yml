@@ -3,7 +3,7 @@ name: Montgomery Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "10 13 * * *"  # daily at noon UTC
+    - cron: '10 14 * * *'  # daily 9:10 EST
 
 jobs:
   scrape:
